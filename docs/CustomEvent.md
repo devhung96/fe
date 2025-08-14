@@ -68,13 +68,12 @@ import axios from "axios";
 
 let accessToken = localStorage.getItem("accessToken");
 
-// Hàm cập nhật token mới khi nhận được từ host
 function setAccessToken(token) {
   accessToken = token;
   localStorage.setItem("accessToken", token);
 }
 
-// Lắng nghe sự kiện từ bProWeb
+// Lắng nghe token mới từ bProWeb
 window.addEventListener("tokenRefreshed", (event) => {
   const { token } = event.detail;
   if (token) {
@@ -82,6 +81,27 @@ window.addEventListener("tokenRefreshed", (event) => {
     console.log("Widget: Token mới nhận:", token);
   }
 });
+
+async function waitForToken(timeout = 1000) {
+  return new Promise((resolve) => {
+    let resolved = false;
+
+    const handler = (event) => {
+      resolved = true;
+      window.removeEventListener("tokenRefreshed", handler);
+      resolve(event.detail.token);
+    };
+
+    window.addEventListener("tokenRefreshed", handler);
+
+    setTimeout(() => {
+      if (!resolved) {
+        window.removeEventListener("tokenRefreshed", handler);
+        resolve(null);
+      }
+    }, timeout);
+  });
+}
 
 const widgetAxios = axios.create({
   baseURL: "https://api.example.com",
@@ -100,37 +120,24 @@ widgetAxios.interceptors.response.use(
     if (error.response?.status === 401) {
       console.log("Widget: Token hết hạn, yêu cầu refresh...");
 
-      // Bắn sự kiện yêu cầu refresh
-      window.dispatchEvent(new CustomEvent("requestTokenRefresh"));
+      let retryCount = 0;
+      let newToken = null;
 
-      // Chờ tối đa 1 giây để nhận token mới
-      const newToken = await new Promise((resolve) => {
-        let resolved = false;
+      while (retryCount < 3 && !newToken) {
+        retryCount++;
+        console.log(`Widget: Thử refresh token lần ${retryCount}...`);
 
-        const handler = (event) => {
-          resolved = true;
-          window.removeEventListener("tokenRefreshed", handler);
-          resolve(event.detail.token);
-        };
+        window.dispatchEvent(new CustomEvent("requestTokenRefresh"));
+        newToken = await waitForToken(1000);
 
-        window.addEventListener("tokenRefreshed", handler);
-
-        // Timeout 1 giây
-        setTimeout(() => {
-          if (!resolved) {
-            window.removeEventListener("tokenRefreshed", handler);
-            resolve(null);
-          }
-        }, 1000);
-      });
-
-      if (newToken) {
-        console.log("Widget: Đang gọi lại API với token mới...");
-        return widgetAxios(error.config); // Gọi lại API
-      } else {
-        console.error("Widget: Không nhận được token mới, trả lỗi.");
-        return Promise.reject(error);
+        if (newToken) {
+          console.log("Widget: Nhận token mới, gọi lại API.");
+          return widgetAxios(error.config);
+        }
       }
+
+      console.error("Widget: Không thể refresh token sau 3 lần thử.");
+      return Promise.reject(error);
     }
 
     return Promise.reject(error);
@@ -142,81 +149,38 @@ export default widgetAxios;
 ```
 + Triển khai bProWeb case detail
 ```reactjs
-// widgetAxios.js
+// bProWeb.js
 import axios from "axios";
 
-let accessToken = localStorage.getItem("accessToken");
+let refreshToken = localStorage.getItem("refreshToken");
 
-// Hàm cập nhật token mới khi nhận được từ host
-function setAccessToken(token) {
-  accessToken = token;
-  localStorage.setItem("accessToken", token);
+async function refreshAccessToken() {
+  console.log("bProWeb: Gọi API refresh token...");
+  const response = await axios.post("https://api.example.com/auth/refresh", {
+    refreshToken,
+  });
+
+  const { accessToken: newToken } = response.data;
+
+  // Lưu vào localStorage của host
+  localStorage.setItem("accessToken", newToken);
+
+  // Gửi token mới cho widget
+  window.dispatchEvent(
+    new CustomEvent("tokenRefreshed", { detail: { token: newToken } })
+  );
+
+  console.log("bProWeb: Đã gửi token mới cho widget.");
 }
 
-// Lắng nghe sự kiện từ bProWeb
-window.addEventListener("tokenRefreshed", (event) => {
-  const { token } = event.detail;
-  if (token) {
-    setAccessToken(token);
-    console.log("Widget: Token mới nhận:", token);
-  }
+window.addEventListener("requestTokenRefresh", () => {
+  refreshAccessToken().catch((err) => {
+    console.error("bProWeb: Lỗi refresh token", err);
+    // Vẫn gửi sự kiện để widget biết là không thành công
+    window.dispatchEvent(new CustomEvent("tokenRefreshed", { detail: { token: null } }));
+  });
 });
 
-const widgetAxios = axios.create({
-  baseURL: "https://api.example.com",
-});
-
-widgetAxios.interceptors.request.use((config) => {
-  if (accessToken) {
-    config.headers.Authorization = `Bearer ${accessToken}`;
-  }
-  return config;
-});
-
-widgetAxios.interceptors.response.use(
-  (response) => response,
-  async (error) => {
-    if (error.response?.status === 401) {
-      console.log("Widget: Token hết hạn, yêu cầu refresh...");
-
-      // Bắn sự kiện yêu cầu refresh
-      window.dispatchEvent(new CustomEvent("requestTokenRefresh"));
-
-      // Chờ tối đa 1 giây để nhận token mới
-      const newToken = await new Promise((resolve) => {
-        let resolved = false;
-
-        const handler = (event) => {
-          resolved = true;
-          window.removeEventListener("tokenRefreshed", handler);
-          resolve(event.detail.token);
-        };
-
-        window.addEventListener("tokenRefreshed", handler);
-
-        // Timeout 1 giây
-        setTimeout(() => {
-          if (!resolved) {
-            window.removeEventListener("tokenRefreshed", handler);
-            resolve(null);
-          }
-        }, 1000);
-      });
-
-      if (newToken) {
-        console.log("Widget: Đang gọi lại API với token mới...");
-        return widgetAxios(error.config); // Gọi lại API
-      } else {
-        console.error("Widget: Không nhận được token mới, trả lỗi.");
-        return Promise.reject(error);
-      }
-    }
-
-    return Promise.reject(error);
-  }
-);
-
-export default widgetAxios;
 
 ```
 
