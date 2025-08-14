@@ -41,5 +41,19 @@ export function EventListener() {
 
 ```
 
+## Case study
+### Refresh token cross microsite
++ Để bài:
+```
+Triển khai refresh token cho nhiều site khác nhau trong reactjs.
+bProWeb con host chứa widget.
+1. Khi Widget  gọi API với token cũ → bị 401.
+2. Widget bắn requestTokenRefresh qua window event.
+3. bProWeb bắt được → gọi API refresh token → bắn tokenRefreshed với token mới.
+4. Widget nhận token mới và gọi API lại
+Widget sử dụng axios intercepter đển handler 401 và sẽ có timeout đợi refresh token 1s không có thì trả về lỗi và dựng lại. 
+Dùng customEvent để triển khai giúp tôi giải pháp trên.
+```
+
 ## Docs
 1. https://developer.mozilla.org/en-US/docs/Web/API/CustomEvent/CustomEvent
